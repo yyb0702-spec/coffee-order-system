@@ -15,6 +15,7 @@
 - [기술적 선택 이유](#기술적-선택-이유)
 - [도전 요구사항 대응 현황](#도전-요구사항-대응-현황)
 - [테스트](#테스트)
+- [로컬 실행 검증](#로컬-실행-검증)
 - [향후 확장 과제](#향후-확장-과제)
 
 ## 빠른 시작
@@ -226,9 +227,9 @@ H2로는 실제 운영 환경과 같은 수준의 신뢰도를 담보할 수 없
 | 다수 서버·다수 인스턴스에서의 안전한 동작 | 락 상태를 인스턴스 로컬 메모리가 아닌 Redis(Redisson)·DB에 두어 인스턴스 수와 무관하게 정확성을 보장한다. `docker-compose`로 인프라를, k6 다중 `BASE_URLS` 옵션으로 다중 인스턴스 시나리오를 재현할 수 있다. 인스턴스가 공통으로 의존하는 Redis 자체의 단일 장애점 문제는 Sentinel 토폴로지 + 컨테이너화된 `app` 서비스로 인프라 레벨까지 확장했다(ADR-009). |
 | 동시성 처리 | Redisson 분산 락(1차) + DB 비관적 락(최종). 주문(`OrderService`)과 포인트 충전(`PointChargeService`) 모두 동일 구조. `OrderConcurrencyIntegrationTest`로 수치 검증. 락 해제(`unlock()`) 실패가 이미 성공한 응답을 덮어쓰지 않도록 별도 방어 처리. |
 | 데이터 일관성 | `point_transaction` 원장을 원천으로, `user_point.balance`를 캐시로 분리. Kafka 이벤트는 `AFTER_COMMIT`에만 발행해 결제 트랜잭션과 분리. 랭킹 Consumer는 ledger(`ProcessedEvent`) DB insert를 Redis 반영보다 먼저 수행해, 트랜잭션 롤백 후 재시도되는 경우에도 Redis가 이중으로 증가하지 않게 했다. |
-| 각 기능/제약별 테스트 | `OrderConcurrencyIntegrationTest`(동시성), `OrderEventKafkaIntegrationTest`(이벤트 발행-소비, 멱등성), `IndexUsageVerificationTest`(EXPLAIN 기반 인덱스 사용 검증), `CoffeeOrderSystemApplicationTests`(컨텍스트 로딩). |
+| 각 기능/제약별 테스트 | `OrderConcurrencyIntegrationTest`(동시성), `OrderEventKafkaIntegrationTest`(이벤트 발행-소비, 멱등성), `IndexUsageVerificationTest`(EXPLAIN 기반 인덱스 사용 검증), `CoffeeOrderSystemApplicationTests`(컨텍스트 로딩). 4개 전부 로컬에서 실제 실행해 통과 확인([로컬 실행 검증](#로컬-실행-검증)). |
 | 데이터 수집 플랫폼 실시간 전송(모의) | `event.producer.OrderEventProducer`가 Kafka로 발행하는 것을 실시간 전송의 진입점으로 삼았다. 실제 외부 플랫폼 연동은 이 topic을 구독하는 별도 Consumer(모의/테스트 코드)로 대체 가능하다. |
-| 장애 복구 운영 도구 | Redis 유실 시 DB 재계산(`POST /api/menus/popular/rebuild`), Kafka 소비 실패 누적 시 DLT 수동 재발행(`POST /api/admin/dlt/replay`), ledger 보존기간 정리(`POST /api/admin/processed-events/purge`, 매일 자동 실행). Redis 연결 자체가 끊긴 경우에도 인기 메뉴 조회가 500으로 죽지 않고 DB 폴백으로 전환된다(`RankingService`). |
+| 장애 복구 운영 도구 | Redis 유실 시 DB 재계산(`POST /api/menus/popular/rebuild`), Kafka 소비 실패 누적 시 DLT 수동 재발행(`POST /api/admin/dlt/replay`), ledger 보존기간 정리(`POST /api/admin/processed-events/purge`, 매일 자동 실행). Redis 연결 자체가 끊긴 경우에도 인기 메뉴 조회가 500으로 죽지 않고 DB 폴백으로 전환된다(`RankingService`). DLT 재시도/재발행과 Redis 폴백 둘 다 로컬에서 강제 장애를 유발해 실제로 확인했다([로컬 실행 검증](#로컬-실행-검증)). |
 
 ## 테스트
 
@@ -236,13 +237,41 @@ H2로는 실제 운영 환경과 같은 수준의 신뢰도를 담보할 수 없
 ./gradlew test
 ```
 
+- `CoffeeOrderSystemApplicationTests`: Spring 컨텍스트가 정상 로딩되는지 확인한다.
 - `OrderConcurrencyIntegrationTest`: Testcontainers MySQL/Redis/Kafka로 실제 인프라를 띄워
   동시 주문 10건 시나리오(성공 2건/실패 8건/잔액 2,000P)를 검증한다.
 - `OrderEventKafkaIntegrationTest`: Testcontainers Kafka로 `OrderCompletedEvent` 발행-소비와
   `eventId` 기준 중복 소비 방지를 검증한다.
+- `IndexUsageVerificationTest`: Testcontainers MySQL + EXPLAIN으로 `user_point`/`orders` 조회가
+  의도한 인덱스(`uk_user_point_user_id`, `idx_orders_status_ordered_at`)를 타는지 검증한다.
 
-Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야 한다. 부하 테스트는
+Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야 한다. 4개 전부 로컬에서 실제로
+실행해 통과를 확인했다(아래 [로컬 실행 검증](#로컬-실행-검증) 참고). 부하 테스트는
 [`k6/README.md`](k6/README.md)를 참고한다.
+
+## 로컬 실행 검증
+
+문서로만 남기지 않고 실제로 로컬에서 기동해 관찰한 결과다 (검증일 2026-07-20). ADR 운영 규칙의
+"실제 근거 vs 계획된 검증" 구분과 동일한 기준을 README에도 적용한다.
+
+- **통합 테스트**: `./gradlew test`의 4개 테스트 클래스 전부 통과. `IndexUsageVerificationTest`가
+  기대한 인덱스 이름 그대로(코드 수정 없이) 확인됐다.
+- **k6 부하 테스트**: 기본 시나리오(10,000P/4,000P/동시 10건) 기준 `order_success=2`,
+  `order_insufficient_point=8`, `order_lock_not_acquired`는 0에 가까웠고, `http_req_failed<1%`
+  임계값을 통과했다.
+- **Kafka 재시도 → DLT → 재발행**: Redis를 강제로 내려 랭킹 컨슈머 처리를 의도적으로 실패시킨 뒤,
+  재시도(1초 간격 2회) 소진 → `order.completed.DLT` 이동 → `POST /api/admin/dlt/replay` 재발행까지
+  확인했다. 응답은 `{"replayedCount": 1}`, 이후 `/api/menus/popular`에 해당 메뉴 점수가 반영됨을
+  확인했다.
+- **Redis 장애 시 DB 폴백**: Redis를 내린 상태에서 `GET /api/menus/popular` 호출 시 500이 아닌
+  200(DB 기준 랭킹)으로 응답함을 확인했다.
+- **Idempotency-Key 중복 차단**: 동일한 `Idempotency-Key`로 재요청 시 첫 요청 200, 두 번째 요청
+  409(`DUPLICATE_REQUEST`)를 확인했다. `http/api-requests.http`의 나머지 에러 케이스(유효성 실패,
+  존재하지 않는 메뉴, 헤더 누락)도 함께 확인했다.
+- **host bootRun 경로**: `docker compose up -d mysql redis kafka` + `./gradlew bootRun` 조합이
+  정상 동작하고, Kafka EXTERNAL 리스너(`localhost:9092`)에서 에러가 없음을 확인했다.
+- **Redis Sentinel failover**: [ADR-009](docs/adr/ADR-009-containerize-app-for-sentinel-ha.md) 참고
+  (Master 강제 종료 → 승격 약 10초 → 앱 재연결까지 추가 약 3~4초, 체감 관찰치).
 
 ## 향후 확장 과제
 
