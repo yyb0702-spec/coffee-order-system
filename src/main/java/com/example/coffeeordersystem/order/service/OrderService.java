@@ -5,6 +5,7 @@ import com.example.coffeeordersystem.common.exception.ErrorCode;
 import com.example.coffeeordersystem.order.dto.OrderRequest;
 import com.example.coffeeordersystem.order.dto.OrderResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.redisson.api.RLock;
 import org.redisson.api.RedissonClient;
 import org.springframework.stereotype.Service;
@@ -18,6 +19,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class OrderService {
 
     private static final String LOCK_KEY_PREFIX = "order-lock:";
@@ -45,8 +47,15 @@ public class OrderService {
         try {
             return orderPaymentProcessor.pay(idempotencyKey, request);
         } finally {
+            // unlock()이 던지는 예외가 위에서 이미 완성된 성공 응답을 덮어쓰지 않도록 방어한다(#116 대응).
+            // 락은 어차피 leaseTime(LOCK_LEASE_SECONDS) 후 자동 만료되므로, 해제 실패는 로그만 남기고 넘어간다.
             if (lock.isHeldByCurrentThread()) {
-                lock.unlock();
+                try {
+                    lock.unlock();
+                } catch (Exception e) {
+                    log.warn("주문 락 해제에 실패했습니다. leaseTime 이후 자동 만료됩니다. userId={}",
+                            request.userId(), e);
+                }
             }
         }
     }
