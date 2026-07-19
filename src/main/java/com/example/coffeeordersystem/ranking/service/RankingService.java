@@ -7,6 +7,7 @@ import com.example.coffeeordersystem.order.repository.OrderRepository;
 import com.example.coffeeordersystem.ranking.dto.PopularMenuResponse;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DataAccessException;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
@@ -45,10 +46,18 @@ public class RankingService {
     private final MenuRepository menuRepository;
 
     public List<PopularMenuResponse> getPopularMenus() {
-        List<Map.Entry<Long, Long>> ranked = readFromRedis();
+        List<Map.Entry<Long, Long>> ranked;
+        try {
+            ranked = readFromRedis();
+        } catch (DataAccessException e) {
+            // Redis가 아예 죽어있으면 unionAndStore/reverseRangeWithScores가 예외를 던진다.
+            // "결과가 비어있는 경우"뿐 아니라 "연결 자체가 안 되는 경우"에도 API가 500으로
+            // 죽지 않고 DB(원천)로 폴백해야 ADR-004의 "장애 시 폴백" 의도가 실제로 지켜진다.
+            log.warn("Redis 조회에 실패해 DB 폴백 경로로 전환합니다.", e);
+            ranked = List.of();
+        }
 
         if (ranked.isEmpty()) {
-            // TODO: Redis 장애/초기 기동 등으로 신뢰할 수 없는 상태 판별 로직을 보강한다.
             ranked = readFromDatabase();
         }
 
