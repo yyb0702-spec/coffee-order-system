@@ -39,14 +39,16 @@ public class UserPoint {
     }
 
     /**
-     * TODO: 충전 시 balance를 증가시킨다. 도메인 검증(금액 범위)은 PointService에서 먼저 수행한다.
+     * 충전 시 balance를 증가시킨다. 도메인 검증(금액 범위)은 PointService에서 먼저 수행한다.
      */
     public void charge(int amount) {
         this.balance += amount;
     }
 
     /**
-     * TODO: 주문 결제 시 balance를 차감한다. 잔액 부족 시 BusinessException(INSUFFICIENT_POINT).
+     * 주문 결제 시 balance를 차감한다. 잔액 부족은 원칙적으로 OrderPaymentProcessor가
+     * 먼저 검사해 BusinessException(INSUFFICIENT_POINT)로 막는다. 아래 예외는 그 검사를
+     * 우회해서 호출된 경우를 위한 마지막 안전장치다.
      */
     public void use(int amount) {
         if (this.balance < amount) {
