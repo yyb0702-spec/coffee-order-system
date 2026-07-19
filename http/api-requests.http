@@ -1,0 +1,92 @@
+### coffee-order-system API 수동 테스트 산출물 (IntelliJ HTTP Client 형식)
+### docs/api/api-spec.md의 4개 API + 랭킹 재구성(운영용) 엔드포인트를 다룬다.
+### 사용법: docker/docker-compose.yml + ./gradlew bootRun 으로 앱을 띄운 뒤, 각 블록을 위에서부터 순서대로 실행한다.
+### (포인트 충전 -> 주문 -> 랭킹 조회 순으로 데이터가 쌓여야 뒤 요청이 의미가 있다)
+
+@baseUrl = http://localhost:8080
+@userId = 9999
+@menuId = 1
+
+### 1. 메뉴 목록 조회
+GET {{baseUrl}}/api/menus
+Accept: application/json
+
+### 2. 포인트 충전 (Idempotency-Key로 중복 충전을 방지한다. 같은 키로 재요청하면 409 DUPLICATE_REQUEST)
+POST {{baseUrl}}/api/points/charge
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "userId": {{userId}},
+  "amount": 10000
+}
+
+### 2-1. 같은 요청을 동일한 Idempotency-Key로 재전송 -> 409 DUPLICATE_REQUEST 확인용
+# @name duplicateCharge
+POST {{baseUrl}}/api/points/charge
+Content-Type: application/json
+Idempotency-Key: fixed-test-key-charge-001
+
+{
+  "userId": {{userId}},
+  "amount": 10000
+}
+
+### 2-2. 위와 같은 Idempotency-Key로 다시 전송 (2-1 응답은 201/200, 이건 409여야 정상)
+POST {{baseUrl}}/api/points/charge
+Content-Type: application/json
+Idempotency-Key: fixed-test-key-charge-001
+
+{
+  "userId": {{userId}},
+  "amount": 10000
+}
+
+### 2-3. 충전 금액 유효성 검증 실패 (음수) -> 400 INVALID_REQUEST 또는 INVALID_CHARGE_AMOUNT
+POST {{baseUrl}}/api/points/charge
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "userId": {{userId}},
+  "amount": -1000
+}
+
+### 3. 주문/결제 (메뉴 가격만큼 포인트 차감)
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "userId": {{userId}},
+  "menuId": {{menuId}}
+}
+
+### 3-1. 존재하지 않는 메뉴로 주문 -> 404 MENU_NOT_FOUND
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+Idempotency-Key: {{$uuid}}
+
+{
+  "userId": {{userId}},
+  "menuId": 999999
+}
+
+### 3-2. Idempotency-Key 누락 -> 400 (MissingRequestHeaderException -> INVALID_REQUEST)
+POST {{baseUrl}}/api/orders
+Content-Type: application/json
+
+{
+  "userId": {{userId}},
+  "menuId": {{menuId}}
+}
+
+### 4. 인기 메뉴 Top 3 조회 (최근 7일)
+GET {{baseUrl}}/api/menus/popular
+Accept: application/json
+
+### 5. (운영용) Redis 랭킹 ZSET을 DB 기준으로 재구성
+POST {{baseUrl}}/api/menus/popular/rebuild
+
+### 6. (운영용) DLT에 쌓인 메시지를 원본 topic으로 재발행 (최대 100건)
+POST {{baseUrl}}/api/admin/dlt/replay?maxRecords=100
