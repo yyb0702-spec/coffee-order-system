@@ -1,3 +1,47 @@
 spring:
   application:
     name: coffee-order-system
+
+  datasource:
+    url: jdbc:mysql://localhost:3306/coffee_order_system
+    username: root
+    password: 12345678
+    driver-class-name: com.mysql.cj.jdbc.Driver
+
+  jpa:
+    hibernate:
+      # 스키마는 Flyway로 관리한다. ddl-auto는 validate로 고정해 드리프트를 방지한다.
+      ddl-auto: validate
+    open-in-view: false
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+
+  data:
+    redis:
+      host: localhost
+      port: 6379
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: ranking-consumer-group
+      auto-offset-reset: earliest
+      key-deserializer: org.apache.kafka.common.serialization.StringDeserializer
+      value-deserializer: org.springframework.kafka.support.serializer.JsonDeserializer
+      properties:
+        spring.json.trusted.packages: com.example.coffeeordersystem.event.dto
+    producer:
+      key-serializer: org.apache.kafka.common.serialization.StringSerializer
+      value-serializer: org.springframework.kafka.support.serializer.JsonSerializer
+
+redisson:
+  address: redis://localhost:6379
+
+# 주문 도메인에서 사용하는 Kafka topic 이름 (event 도메인 상수와 동기화)
+app:
+  kafka:
+    topic:
+      order-completed: order.completed
+      order-completed-dlt: order.completed.DLT
