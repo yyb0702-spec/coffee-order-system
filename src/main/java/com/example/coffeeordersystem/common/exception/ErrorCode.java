@@ -10,6 +10,7 @@ public enum ErrorCode {
     INSUFFICIENT_POINT(HttpStatus.CONFLICT, "포인트 잔액이 부족합니다."),
     ORDER_LOCK_NOT_ACQUIRED(HttpStatus.CONFLICT, "요청이 몰려 처리하지 못했습니다. 잠시 후 다시 시도해주세요."),
     DUPLICATE_REQUEST(HttpStatus.CONFLICT, "이미 처리된 요청입니다."),
+    INVALID_REQUEST(HttpStatus.BAD_REQUEST, "요청 값이 올바르지 않습니다."),
     INTERNAL_ERROR(HttpStatus.INTERNAL_SERVER_ERROR, "서버 내부 오류가 발생했습니다.");
 
     private final HttpStatus httpStatus;
