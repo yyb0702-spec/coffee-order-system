@@ -18,6 +18,8 @@ import java.time.LocalDateTime;
 
 /**
  * docs/point-policy.md 기준 스켈레톤.
+ * userId 기준 요청 진입 직렬화(최초 충전 동시 요청 레이스 방지)는 PointChargeService가 맡고,
+ * 이 클래스는 그 안에서 실행되는 트랜잭션 본체(잔액 검증 + 원장 insert)만 담당한다.
  */
 @Service
 @RequiredArgsConstructor
@@ -38,8 +40,9 @@ public class PointService {
 
         validateChargeAmount(request.amount());
 
-        // TODO: 동시 최초-충전 요청(같은 userId, row 없음) 경합은 이번 스켈레톤 범위 밖.
-        //       unique 제약(user_id) 위반 시 재조회하는 재시도 로직을 구현 단계에서 추가한다.
+        // 최초 충전(row 없음) 동시 요청 레이스는 PointChargeService의 userId 락으로
+        // 이 메서드에 진입하는 시점부터 이미 직렬화돼 있다. 따라서 이 시점에는 같은 userId로
+        // 두 스레드가 동시에 findByUserIdForUpdate를 호출할 수 없다.
         UserPoint userPoint = userPointRepository.findByUserIdForUpdate(request.userId())
                 .orElseGet(() -> userPointRepository.save(new UserPoint(request.userId(), 0)));
 
