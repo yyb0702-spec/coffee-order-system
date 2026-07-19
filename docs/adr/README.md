@@ -21,3 +21,4 @@ ADR은 `Proposed`, `Accepted`, `Rejected`, `Deprecated`, `Superseded` 중 하나
 - [ADR-005 포인트 원장(ledger) 테이블 도입](ADR-005-point-ledger-table.md)
 - [ADR-006 Idempotency Key 도입](ADR-006-idempotency-key.md)
 - [ADR-007 Testcontainers와 k6 테스트 전략](ADR-007-testcontainers-and-k6.md)
+- [ADR-008 프로덕션 확장 시 Redis Sentinel 도입](ADR-008-redis-sentinel-for-scale.md)

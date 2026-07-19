@@ -62,6 +62,7 @@ k6 run -e BASE_URL=http://localhost:8080 k6/order-concurrency-test.js
 | [ADR-005](docs/adr/ADR-005-point-ledger-table.md) | 포인트 원장(ledger) 테이블 도입 |
 | [ADR-006](docs/adr/ADR-006-idempotency-key.md) | Idempotency-Key로 중복 요청 차단 |
 | [ADR-007](docs/adr/ADR-007-testcontainers-and-k6.md) | Testcontainers + k6 테스트 전략 |
+| [ADR-008](docs/adr/ADR-008-redis-sentinel-for-scale.md) | 프로덕션 확장 시 Redis Sentinel 도입 |
 
 ## 설계의 의도
 
@@ -242,3 +243,6 @@ Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야
 - **QueryDSL 도입**: 쿼리 인덱스 사용 여부는 `IndexUsageVerificationTest`(EXPLAIN)로 검증했지만,
   타입 세이프 쿼리 빌더(QueryDSL) 자체는 도입하지 않았다. 이 환경에서 Gradle 애노테이션 프로세서
   설정을 실제로 컴파일 검증할 수 없어, 빌드를 깨뜨릴 위험을 감수하지 않기로 판단했다.
+- **Redis 고가용성(Sentinel)**: 현재 로컬 인프라는 단일 Redis 인스턴스라 SPOF다. 프로덕션 확장
+  시 Sentinel 도입 방향을 ADR-008에 문서화했지만, 실제 Sentinel 구성/failover 실증은 로컬
+  인프라에 반영하지 않았다(로컬 실행 복잡도 대비 검증 가치가 낮다고 판단).
