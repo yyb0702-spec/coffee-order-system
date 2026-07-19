@@ -1,0 +1,11 @@
+.git
+.gradle
+.idea
+build
+out
+*.iml
+docs
+k6
+http
+HELP.md
+README.md

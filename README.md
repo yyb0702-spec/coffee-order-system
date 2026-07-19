@@ -19,9 +19,14 @@
 
 ## 빠른 시작
 
+두 가지 실행 방식이 있다. 평소 개발은 1번, Redis Sentinel 인프라 가용성(ADR-009)을 보고
+싶을 때는 2번을 쓴다.
+
+### 1) 빠른 개발 반복 (앱은 host에서 직접 실행)
+
 ```bash
 # 1. 로컬 인프라(MySQL/Redis/Kafka) 기동
-docker compose -f docker/docker-compose.yml up -d
+docker compose -f docker/docker-compose.yml up -d mysql redis kafka
 
 # 2. 애플리케이션 실행 (Flyway가 기동 시점에 스키마/시드 데이터를 적용한다)
 ./gradlew bootRun
@@ -32,6 +37,19 @@ docker compose -f docker/docker-compose.yml up -d
 # 4. 부하 테스트 (선택)
 k6 run -e BASE_URL=http://localhost:8080 k6/order-concurrency-test.js
 ```
+
+### 2) 전체 스택 (앱까지 컨테이너화, Redis Sentinel HA 포함)
+
+```bash
+docker compose -f docker/docker-compose.yml up -d --build
+# http://localhost:8080 으로 접속
+```
+
+`app` 서비스가 Dockerfile로 빌드돼 `redis-master`/`redis-replica-*`/`redis-sentinel-*`,
+Kafka와 같은 docker 네트워크에서 실행된다. Master를 강제 종료해도 Sentinel 쿼럼 합의로
+자동 승격되는지 확인할 수 있다 (자세한 설계는 [ADR-009](docs/adr/ADR-009-containerize-app-for-sentinel-ha.md)).
+이 방식은 이 저장소를 만든 환경에서 직접 실행·검증하지 못했으므로, 로컬에서 처음 띄워볼 때는
+`docker compose logs -f app`으로 기동 로그를 확인하는 것을 권장한다.
 
 애플리케이션 접속 정보(DB/Redis/Kafka)는 `src/main/resources/application.yaml`과
 `docker/docker-compose.yml`이 항상 일치하도록 관리한다.
@@ -62,7 +80,8 @@ k6 run -e BASE_URL=http://localhost:8080 k6/order-concurrency-test.js
 | [ADR-005](docs/adr/ADR-005-point-ledger-table.md) | 포인트 원장(ledger) 테이블 도입 |
 | [ADR-006](docs/adr/ADR-006-idempotency-key.md) | Idempotency-Key로 중복 요청 차단 |
 | [ADR-007](docs/adr/ADR-007-testcontainers-and-k6.md) | Testcontainers + k6 테스트 전략 |
-| [ADR-008](docs/adr/ADR-008-redis-sentinel-for-scale.md) | 프로덕션 확장 시 Redis Sentinel 도입 |
+| [ADR-008](docs/adr/ADR-008-redis-sentinel-for-scale.md) | 프로덕션 확장 시 Redis Sentinel 도입 (Superseded by ADR-009) |
+| [ADR-009](docs/adr/ADR-009-containerize-app-for-sentinel-ha.md) | 앱 컨테이너화로 Redis Sentinel 인프라 가용성 실증 |
 
 ## 설계의 의도
 
@@ -204,7 +223,7 @@ H2로는 실제 운영 환경과 같은 수준의 신뢰도를 담보할 수 없
 
 | 요구사항 | 대응 |
 | --- | --- |
-| 다수 서버·다수 인스턴스에서의 안전한 동작 | 락 상태를 인스턴스 로컬 메모리가 아닌 Redis(Redisson)·DB에 두어 인스턴스 수와 무관하게 정확성을 보장한다. `docker-compose`로 인프라를, k6 다중 `BASE_URLS` 옵션으로 다중 인스턴스 시나리오를 재현할 수 있다. |
+| 다수 서버·다수 인스턴스에서의 안전한 동작 | 락 상태를 인스턴스 로컬 메모리가 아닌 Redis(Redisson)·DB에 두어 인스턴스 수와 무관하게 정확성을 보장한다. `docker-compose`로 인프라를, k6 다중 `BASE_URLS` 옵션으로 다중 인스턴스 시나리오를 재현할 수 있다. 인스턴스가 공통으로 의존하는 Redis 자체의 단일 장애점 문제는 Sentinel 토폴로지 + 컨테이너화된 `app` 서비스로 인프라 레벨까지 확장했다(ADR-009). |
 | 동시성 처리 | Redisson 분산 락(1차) + DB 비관적 락(최종). 주문(`OrderService`)과 포인트 충전(`PointChargeService`) 모두 동일 구조. `OrderConcurrencyIntegrationTest`로 수치 검증. 락 해제(`unlock()`) 실패가 이미 성공한 응답을 덮어쓰지 않도록 별도 방어 처리. |
 | 데이터 일관성 | `point_transaction` 원장을 원천으로, `user_point.balance`를 캐시로 분리. Kafka 이벤트는 `AFTER_COMMIT`에만 발행해 결제 트랜잭션과 분리. 랭킹 Consumer는 ledger(`ProcessedEvent`) DB insert를 Redis 반영보다 먼저 수행해, 트랜잭션 롤백 후 재시도되는 경우에도 Redis가 이중으로 증가하지 않게 했다. |
 | 각 기능/제약별 테스트 | `OrderConcurrencyIntegrationTest`(동시성), `OrderEventKafkaIntegrationTest`(이벤트 발행-소비, 멱등성), `IndexUsageVerificationTest`(EXPLAIN 기반 인덱스 사용 검증), `CoffeeOrderSystemApplicationTests`(컨텍스트 로딩). |
@@ -243,6 +262,8 @@ Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야
 - **QueryDSL 도입**: 쿼리 인덱스 사용 여부는 `IndexUsageVerificationTest`(EXPLAIN)로 검증했지만,
   타입 세이프 쿼리 빌더(QueryDSL) 자체는 도입하지 않았다. 이 환경에서 Gradle 애노테이션 프로세서
   설정을 실제로 컴파일 검증할 수 없어, 빌드를 깨뜨릴 위험을 감수하지 않기로 판단했다.
-- **Redis 고가용성(Sentinel)**: 현재 로컬 인프라는 단일 Redis 인스턴스라 SPOF다. 프로덕션 확장
-  시 Sentinel 도입 방향을 ADR-008에 문서화했지만, 실제 Sentinel 구성/failover 실증은 로컬
-  인프라에 반영하지 않았다(로컬 실행 복잡도 대비 검증 가치가 낮다고 판단).
+- **Redis Sentinel failover 실측**: `docker-compose`에 Master 1 + Replica 2 + Sentinel 3
+  토폴로지와 컨테이너화된 `app` 서비스를 구성했다(ADR-009). 다만 이 구성을 실제로 기동해
+  Master 강제 종료 → 자동 승격 → 앱 재연결까지 걸리는 시간을 측정하는 작업은 이 환경에
+  Docker 데몬이 없어 수행하지 못했다. 로컬에서 직접 실행해 failover 소요 시간과, 그 동안의
+  락 획득 실패율을 k6로 계측하는 것이 다음 단계다.

@@ -1,9 +1,19 @@
-# 로컬 개발/통합 테스트용 인프라. application.yaml의 접속 정보와 반드시 맞춰야 한다.
-# - MySQL   : localhost:3306 / coffee_order_system / root / 12345678
-# - Redis   : localhost:6379
-# - Kafka   : localhost:9092 (KRaft 단일 브로커, Zookeeper 불필요)
+# 로컬 개발/통합 테스트/HA 실증용 인프라. application.yaml의 접속 정보와 반드시 맞춰야 한다.
 #
-# 실행: docker compose -f docker/docker-compose.yml up -d
+# 두 가지 실행 방식을 지원한다.
+#
+# 1) 앱을 host에서 직접 실행 (./gradlew bootRun) — 빠른 반복 개발용
+#    - MySQL   : localhost:3306 / coffee_order_system / root / 12345678
+#    - Redis   : localhost:6379 (단일 인스턴스, redis 서비스)
+#    - Kafka   : localhost:9092 (EXTERNAL 리스너)
+#    실행: docker compose -f docker/docker-compose.yml up -d mysql redis kafka
+#
+# 2) 앱까지 컨테이너화해서 전체 스택 실행 — Redis Sentinel 인프라 레벨 가용성 실증용
+#    (docs/adr/ADR-009 참고). app 서비스는 redis-master/replica/sentinel과 같은 docker
+#    네트워크 안에서 서비스 이름으로 서로를 찾는다.
+#    실행: docker compose -f docker/docker-compose.yml up -d --build
+#    접속: http://localhost:8080
+#
 # 종료: docker compose -f docker/docker-compose.yml down -v
 
 services:
@@ -25,6 +35,8 @@ services:
       timeout: 5s
       retries: 10
 
+  # 단일 Redis 인스턴스. host에서 ./gradlew bootRun으로 앱을 띄울 때만 사용한다.
+  # 컨테이너화된 app 서비스는 아래 Sentinel 토폴로지(redis-master 등)를 대신 사용한다.
   redis:
     image: redis:7.2-alpine
     container_name: coffee-order-redis
@@ -47,22 +59,115 @@ services:
       - "9092:9092"
     environment:
       # KRaft 단일 노드(combined mode): Zookeeper 없이 broker+controller가 한 프로세스에서 동작.
-      # 앱은 컨테이너가 아니라 host에서 직접 붙으므로 advertised listener를 localhost:9092로 고정한다.
-      # (공식 이미지 문서: https://hub.docker.com/r/apache/kafka 의 단일 노드 예제 그대로)
+      # 리스너를 INTERNAL/EXTERNAL 두 개로 나눈다.
+      #   - INTERNAL(kafka:29092): 같은 docker 네트워크 안의 컨테이너(app 서비스)가 사용.
+      #   - EXTERNAL(localhost:9092): host에서 직접 ./gradlew bootRun 할 때 사용.
+      # 하나의 advertised listener만 쓰면 두 경로 중 하나는 반드시 접속 실패한다(호스트명이
+      # 서로 다른 네트워크 네임스페이스에서 다르게 resolve되기 때문) — 그래서 두 개로 분리했다.
       KAFKA_NODE_ID: 1
       KAFKA_PROCESS_ROLES: broker,controller
-      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_LISTENERS: INTERNAL://:29092,EXTERNAL://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: INTERNAL://kafka:29092,EXTERNAL://localhost:9092
       KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,INTERNAL:PLAINTEXT,EXTERNAL:PLAINTEXT
       KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
-      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: INTERNAL
       KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
       KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
       KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
     # 데이터 볼륨은 마운트하지 않는다 — 로컬 개발/테스트용 토픽 데이터는 `docker compose down` 시
     # 함께 사라져도 무방하고, 이미지 내부 데이터 경로를 문서로 확인하지 못해 임의로 마운트하지 않았다.
+
+  # ---- Redis Sentinel 토폴로지 (Master 1 + Replica 2 + Sentinel 3, 쿼럼 2) ----
+  # 컨테이너화된 app 서비스 전용. docs/adr/ADR-009 참고.
+  redis-master:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis-master
+    restart: unless-stopped
+
+  redis-replica-1:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis-replica-1
+    restart: unless-stopped
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+
+  redis-replica-2:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis-replica-2
+    restart: unless-stopped
+    command: redis-server --replicaof redis-master 6379
+    depends_on:
+      - redis-master
+
+  redis-sentinel-1:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis-sentinel-1
+    restart: unless-stopped
+    volumes:
+      - ./redis/sentinel-1.conf:/etc/redis/sentinel.conf
+    command: redis-sentinel /etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+
+  redis-sentinel-2:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis-sentinel-2
+    restart: unless-stopped
+    volumes:
+      - ./redis/sentinel-2.conf:/etc/redis/sentinel.conf
+    command: redis-sentinel /etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+
+  redis-sentinel-3:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis-sentinel-3
+    restart: unless-stopped
+    volumes:
+      - ./redis/sentinel-3.conf:/etc/redis/sentinel.conf
+    command: redis-sentinel /etc/redis/sentinel.conf
+    depends_on:
+      - redis-master
+      - redis-replica-1
+      - redis-replica-2
+
+  # 컨테이너화된 앱. Sentinel 토폴로지 및 Kafka INTERNAL 리스너와 같은 docker 네트워크를 공유한다.
+  app:
+    build:
+      context: ..
+      dockerfile: Dockerfile
+    container_name: coffee-order-app
+    restart: unless-stopped
+    depends_on:
+      mysql:
+        condition: service_healthy
+      kafka:
+        condition: service_started
+      redis-sentinel-1:
+        condition: service_started
+      redis-sentinel-2:
+        condition: service_started
+      redis-sentinel-3:
+        condition: service_started
+    environment:
+      DB_URL: jdbc:mysql://mysql:3306/coffee_order_system
+      DB_USERNAME: root
+      DB_PASSWORD: "12345678"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_SENTINEL_MASTER: mymaster
+      SPRING_DATA_REDIS_SENTINEL_NODES: redis-sentinel-1:26379,redis-sentinel-2:26379,redis-sentinel-3:26379
+      REDISSON_MODE: sentinel
+      REDISSON_SENTINEL_MASTER_NAME: mymaster
+      REDISSON_SENTINEL_NODES: redis://redis-sentinel-1:26379,redis://redis-sentinel-2:26379,redis://redis-sentinel-3:26379
+    ports:
+      - "8080:8080"
 
 volumes:
   mysql-data:
