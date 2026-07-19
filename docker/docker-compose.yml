@@ -38,31 +38,31 @@ services:
       retries: 10
 
   kafka:
-    image: bitnami/kafka:3.7
+    # bitnami/kafka는 2025년부터 Docker Hub 무료 배포가 중단됐다(Bitnami Secure Images 유료 전환).
+    # 대신 Apache Kafka 프로젝트가 공식 배포하는 이미지를 쓴다 (무료, 활발히 유지보수됨).
+    image: apache/kafka:4.0.2
     container_name: coffee-order-kafka
     restart: unless-stopped
     ports:
       - "9092:9092"
     environment:
-      # KRaft 모드: Zookeeper 없이 단일 브로커로 동작 (로컬 개발용 최소 구성).
+      # KRaft 단일 노드(combined mode): Zookeeper 없이 broker+controller가 한 프로세스에서 동작.
       # 앱은 컨테이너가 아니라 host에서 직접 붙으므로 advertised listener를 localhost:9092로 고정한다.
-      KAFKA_CFG_NODE_ID: 0
-      KAFKA_CFG_PROCESS_ROLES: controller,broker
-      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
-      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
-      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
-      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
-      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
-      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
-      ALLOW_PLAINTEXT_LISTENER: "yes"
-    volumes:
-      - kafka-data:/bitnami/kafka
-    healthcheck:
-      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
-      interval: 10s
-      timeout: 10s
-      retries: 10
+      # (공식 이미지 문서: https://hub.docker.com/r/apache/kafka 의 단일 노드 예제 그대로)
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@localhost:9093
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+    # 데이터 볼륨은 마운트하지 않는다 — 로컬 개발/테스트용 토픽 데이터는 `docker compose down` 시
+    # 함께 사라져도 무방하고, 이미지 내부 데이터 경로를 문서로 확인하지 못해 임의로 마운트하지 않았다.
 
 volumes:
   mysql-data:
-  kafka-data:
