@@ -6,7 +6,9 @@ import com.example.coffeeordersystem.order.repository.MenuOrderCount;
 import com.example.coffeeordersystem.order.repository.OrderRepository;
 import com.example.coffeeordersystem.ranking.dto.PopularMenuResponse;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
+import org.springframework.data.domain.Pageable;
 import org.springframework.data.redis.core.StringRedisTemplate;
 import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.stereotype.Service;
@@ -30,6 +32,7 @@ import java.util.UUID;
  */
 @Service
 @RequiredArgsConstructor
+@Slf4j
 public class RankingService {
 
     private static final String KEY_PREFIX = "popular:menus:";
@@ -107,5 +110,33 @@ public class RankingService {
             keys.add(KEY_PREFIX + today.minusDays(i).format(DATE_FORMAT));
         }
         return keys;
+    }
+
+    /**
+     * ADR-004 재검토 조건: Redis 유실/장애 이후 복구 경로.
+     * Kafka replay 기반 자동 복구는 스코프 밖이므로, DB(원천)를 다시 읽어 최근 7일치
+     * 일자별 ZSET(popular:menus:{date})을 그대로 덮어써 재계산하는 수동/배치 복구 절차로 둔다.
+     * 운영에서는 스케줄러나 관리자 API로 트리거하는 것을 전제로 한다.
+     */
+    public void rebuildFromDb() {
+        LocalDate today = LocalDate.now();
+        for (int i = 0; i < RECENT_DAYS; i++) {
+            rebuildDay(today.minusDays(i));
+        }
+        log.info("랭킹 ZSET을 DB 기준으로 재구성했습니다. 대상 기간={}일", RECENT_DAYS);
+    }
+
+    private void rebuildDay(LocalDate day) {
+        LocalDateTime from = day.atStartOfDay();
+        LocalDateTime to = day.plusDays(1).atStartOfDay();
+        String key = KEY_PREFIX + day.format(DATE_FORMAT);
+
+        List<MenuOrderCount> counts = orderRepository.findTopPaidMenuOrderCounts(from, to, Pageable.unpaged());
+
+        // 기존 키를 지우고 다시 채워, 이미 반영돼 있던 값과 중복 합산되지 않게 한다.
+        redisTemplate.delete(key);
+        for (MenuOrderCount count : counts) {
+            redisTemplate.opsForZSet().add(key, String.valueOf(count.getMenuId()), count.getOrderCount());
+        }
     }
 }
