@@ -65,22 +65,23 @@ sentinel 3개, app — 총 9개). 이 중 `redis`(단일 인스턴스)와 Sentin
 서로 간섭하지 않지만, 둘 다 필요하지 않은 경우에는 리소스 낭비다. Kafka 리스너를 두 개로 나누면서
 설정이 한 단계 더 복잡해졌다.
 
-가장 중요한 제약: 이 작업 환경에는 실제 Docker 데몬이 없어 `Dockerfile` 빌드, `docker compose up`,
-Sentinel failover 동작을 여기서 직접 실행해 검증하지 못했다. 문법과 설정값은 공식 문서 기준으로
-작성했지만, 최종 검증은 사용자가 로컬에서 `docker compose -f docker/docker-compose.yml up -d --build`로
-직접 실행해봐야 한다.
+중요한 제약: 이 작업 환경에는 실제 Docker 데몬이 없어 `Dockerfile` 빌드, `docker compose up`,
+Sentinel failover 동작을 이 환경에서 직접 실행해 검증하지는 못했다. 문법과 설정값은 공식 문서
+기준으로 작성했고, 사용자가 로컬에서 직접 기동·failover까지 확인했다(아래 검증 현황 참고).
+다만 이 관찰은 사용자의 체감 관찰이며, k6 같은 도구로 정밀 계측한 수치는 아니다.
 
 ## 검증 현황과 계획
 
-- 실제 근거: 없음. 이 환경에서 Docker를 실행할 수 없어 빌드·기동·failover를 직접 관찰하지 못했다.
-- 계획된 검증 (로컬에서 사용자가 실행):
-  1. `docker compose -f docker/docker-compose.yml up -d --build` 로 전체 스택 기동, `app`이
-     정상적으로 뜨는지(`/api/menus` 등 호출) 확인.
-  2. `docker stop coffee-order-redis-master`로 Master를 강제 종료하고, `redis-cli -p 26379 sentinel
-     master mymaster`(sentinel 컨테이너 안에서)로 새 Master 승격을 확인.
-  3. failover 동안 `/api/orders`, `/api/points/charge` 호출이 얼마나 실패/지연되는지, 승격 후
-     정상 복구되는지 확인. 필요하면 `k6/order-concurrency-test.js`를 failover 시나리오에 맞게
-     확장해 소요 시간과 락 획득 실패율을 계측한다.
+- 실제 근거: 사용자가 로컬에서 `docker compose -f docker/docker-compose.yml up -d --build`로
+  전체 스택을 기동하고, `docker stop coffee-order-redis-master`로 Master를 강제 종료해 확인했다.
+  Sentinel이 새 Master를 승격시키는 데 체감상 약 10초, 이후 앱(Redisson)이 새 Master로
+  재연결해 정상 응답하기까지 추가로 약 3~4초가 걸렸다 — 장애 발생부터 앱이 다시 정상
+  처리하기까지 총 13~14초 정도로 관찰됐다. `down-after-milliseconds 5000` + 쿼럼 합의
+  시간을 감안하면 설정값과 대략 부합하는 범위다. (스톱워치나 스크립트로 정밀 측정한 값이
+  아니라 사용자가 터미널에서 지켜본 체감 수치임을 명시한다.)
+- 계획된 검증: 위 수치를 `k6/order-concurrency-test.js`를 failover 시나리오에 맞게 확장해
+  정밀하게 재측정하고, failover 구간 동안의 락 획득 실패율(`ORDER_LOCK_NOT_ACQUIRED`/
+  `POINT_LOCK_NOT_ACQUIRED` 비율)을 정량적으로 계측한다. 아직 수행하지 않았다.
 
 ## 재검토 조건
 

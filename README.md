@@ -262,8 +262,8 @@ Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야
 - **QueryDSL 도입**: 쿼리 인덱스 사용 여부는 `IndexUsageVerificationTest`(EXPLAIN)로 검증했지만,
   타입 세이프 쿼리 빌더(QueryDSL) 자체는 도입하지 않았다. 이 환경에서 Gradle 애노테이션 프로세서
   설정을 실제로 컴파일 검증할 수 없어, 빌드를 깨뜨릴 위험을 감수하지 않기로 판단했다.
-- **Redis Sentinel failover 실측**: `docker-compose`에 Master 1 + Replica 2 + Sentinel 3
-  토폴로지와 컨테이너화된 `app` 서비스를 구성했다(ADR-009). 다만 이 구성을 실제로 기동해
-  Master 강제 종료 → 자동 승격 → 앱 재연결까지 걸리는 시간을 측정하는 작업은 이 환경에
-  Docker 데몬이 없어 수행하지 못했다. 로컬에서 직접 실행해 failover 소요 시간과, 그 동안의
-  락 획득 실패율을 k6로 계측하는 것이 다음 단계다.
+- **Redis Sentinel failover 정밀 계측**: `docker-compose`에 Master 1 + Replica 2 + Sentinel 3
+  토폴로지와 컨테이너화된 `app` 서비스를 구성했고(ADR-009), 로컬에서 실제로 기동해 Master
+  강제 종료 → 자동 승격 → 앱 재연결까지 확인했다. 체감상 승격에 약 10초, 앱 재연결에 추가로
+  약 3~4초, 총 13~14초 정도 걸렸다(정밀 계측 아닌 관찰치). k6로 이 구간의 소요 시간과 락
+  획득 실패율을 정량적으로 계측하는 것은 아직 남은 작업이다.
