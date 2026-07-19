@@ -2,6 +2,7 @@ package com.example.coffeeordersystem.order.service;
 
 import com.example.coffeeordersystem.common.exception.BusinessException;
 import com.example.coffeeordersystem.common.exception.ErrorCode;
+import com.example.coffeeordersystem.common.idempotency.IdempotencyChecker;
 import com.example.coffeeordersystem.event.dto.OrderCompletedEvent;
 import com.example.coffeeordersystem.menu.entity.Menu;
 import com.example.coffeeordersystem.menu.repository.MenuRepository;
@@ -26,14 +27,20 @@ import java.time.LocalDateTime;
 @RequiredArgsConstructor
 public class OrderPaymentProcessor {
 
+    private static final String ENDPOINT = "POST /api/orders";
+
     private final MenuRepository menuRepository;
     private final UserPointRepository userPointRepository;
     private final PointTransactionRepository pointTransactionRepository;
     private final OrderRepository orderRepository;
     private final ApplicationEventPublisher eventPublisher;
+    private final IdempotencyChecker idempotencyChecker;
 
     @Transactional
-    public OrderResponse pay(OrderRequest request) {
+    public OrderResponse pay(String idempotencyKey, OrderRequest request) {
+        // 비즈니스 로직과 같은 트랜잭션 안에서 먼저 검사한다(ADR-006).
+        idempotencyChecker.requireFirstRequest(idempotencyKey, ENDPOINT);
+
         Menu menu = menuRepository.findById(request.menuId())
                 .orElseThrow(() -> new BusinessException(ErrorCode.MENU_NOT_FOUND));
 

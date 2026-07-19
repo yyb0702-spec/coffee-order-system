@@ -27,7 +27,7 @@ public class OrderService {
     private final RedissonClient redissonClient;
     private final OrderPaymentProcessor orderPaymentProcessor;
 
-    public OrderResponse placeOrder(OrderRequest request) {
+    public OrderResponse placeOrder(String idempotencyKey, OrderRequest request) {
         RLock lock = redissonClient.getLock(LOCK_KEY_PREFIX + request.userId());
 
         boolean acquired;
@@ -43,7 +43,7 @@ public class OrderService {
         }
 
         try {
-            return orderPaymentProcessor.pay(request);
+            return orderPaymentProcessor.pay(idempotencyKey, request);
         } finally {
             if (lock.isHeldByCurrentThread()) {
                 lock.unlock();

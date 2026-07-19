@@ -2,6 +2,7 @@ package com.example.coffeeordersystem.point.service;
 
 import com.example.coffeeordersystem.common.exception.BusinessException;
 import com.example.coffeeordersystem.common.exception.ErrorCode;
+import com.example.coffeeordersystem.common.idempotency.IdempotencyChecker;
 import com.example.coffeeordersystem.point.dto.PointChargeRequest;
 import com.example.coffeeordersystem.point.dto.PointChargeResponse;
 import com.example.coffeeordersystem.point.entity.PointTransaction;
@@ -17,8 +18,6 @@ import java.time.LocalDateTime;
 
 /**
  * docs/point-policy.md 기준 스켈레톤.
- * TODO: Idempotency-Key 처리는 컨트롤러 or AOP에서 공통으로 감싸고,
- *       DUPLICATE_REQUEST 판단 후 이 서비스로 위임하는 구조를 별도 이슈로 구현한다.
  */
 @Service
 @RequiredArgsConstructor
@@ -26,12 +25,17 @@ public class PointService {
 
     private static final int MIN_CHARGE_AMOUNT = 1;
     private static final int MAX_CHARGE_AMOUNT = 1_000_000;
+    private static final String ENDPOINT = "POST /api/points/charge";
 
     private final UserPointRepository userPointRepository;
     private final PointTransactionRepository pointTransactionRepository;
+    private final IdempotencyChecker idempotencyChecker;
 
     @Transactional
-    public PointChargeResponse charge(PointChargeRequest request) {
+    public PointChargeResponse charge(String idempotencyKey, PointChargeRequest request) {
+        // 비즈니스 로직과 같은 트랜잭션 안에서 먼저 검사한다(ADR-006).
+        idempotencyChecker.requireFirstRequest(idempotencyKey, ENDPOINT);
+
         validateChargeAmount(request.amount());
 
         // TODO: 동시 최초-충전 요청(같은 userId, row 없음) 경합은 이번 스켈레톤 범위 밖.
