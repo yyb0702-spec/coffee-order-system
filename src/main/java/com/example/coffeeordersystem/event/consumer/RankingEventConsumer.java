@@ -33,14 +33,20 @@ public class RankingEventConsumer {
             return;
         }
 
-        String dateKey = KEY_PREFIX + event.orderedAt().toLocalDate().format(DATE_FORMAT);
-        redisTemplate.opsForZSet().incrementScore(dateKey, String.valueOf(event.menuId()), 1);
-
+        // DB insert(원장/ledger)를 Redis 반영보다 먼저 수행한다 (#100 대응).
+        // Redis ZINCRBY는 DB 트랜잭션에 묶이지 않아 롤백되지 않으므로, 순서가 반대이면
+        // "Redis 증가 성공 -> DB save 실패 -> 트랜잭션 롤백 -> Kafka 재시도 -> Redis 재증가"
+        // 시나리오에서 이중 카운트가 발생한다. DB save를 먼저 두면 save가 실패할 때
+        // Redis에는 아직 손대지 않은 상태이고, save가 성공한 뒤 Redis 증가가 실패해도
+        // 예외가 전파되며 트랜잭션이 롤백돼 다음 재시도가 두 작업을 처음부터 함께 재현한다.
         processedEventRepository.save(new ProcessedEvent(
                 event.eventId(),
                 "OrderCompletedEvent",
                 CONSUMER_GROUP,
                 LocalDateTime.now()
         ));
+
+        String dateKey = KEY_PREFIX + event.orderedAt().toLocalDate().format(DATE_FORMAT);
+        redisTemplate.opsForZSet().incrementScore(dateKey, String.valueOf(event.menuId()), 1);
     }
 }
