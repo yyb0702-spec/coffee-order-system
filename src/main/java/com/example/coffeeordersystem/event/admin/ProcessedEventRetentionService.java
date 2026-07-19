@@ -29,11 +29,10 @@ public class ProcessedEventRetentionService {
     private final ProcessedEventRepository processedEventRepository;
 
     // 매일 새벽 3시 30분에 정리한다 (트래픽이 적은 시간대).
+    // 스케줄러는 프록시 빈을 통해 호출하므로 같은 메서드에 @Transactional을 함께 둬도
+    // self-invocation으로 인해 트랜잭션이 무시되는 문제가 없다
+    // (ProcessedEventRetentionController#purge에서 직접 호출할 때도 마찬가지로 정상 적용된다).
     @Scheduled(cron = "0 30 3 * * *")
-    public void purgeOldEntriesScheduled() {
-        purgeOldEntries();
-    }
-
     @Transactional
     public long purgeOldEntries() {
         LocalDateTime cutoff = LocalDateTime.now().minusDays(RETENTION_DAYS);
