@@ -50,6 +50,8 @@ k6 run -e BASE_URL=http://localhost:8080 k6/order-concurrency-test.js
   일관성 수준을 규칙 단위로 정리했다.
 - **설계 결정 기록(ADR)**: [`docs/adr/`](docs/adr) — 결정마다 검토한 대안, 결정 동인, 결과와 단점, 검증
   현황을 남긴다. 운영 규칙은 [`docs/adr/README.md`](docs/adr/README.md) 참고.
+- **API 수동 테스트 산출물**: [`http/api-requests.http`](http/api-requests.http) — 4개 API 정상 케이스와
+  주요 에러 케이스(중복 요청, 유효성 실패, 존재하지 않는 메뉴 등)를 IntelliJ HTTP Client 형식으로 정리했다.
 
 | ADR | 내용 |
 | --- | --- |
@@ -198,10 +200,11 @@ H2로는 실제 운영 환경과 같은 수준의 신뢰도를 담보할 수 없
 | 요구사항 | 대응 |
 | --- | --- |
 | 다수 서버·다수 인스턴스에서의 안전한 동작 | 락 상태를 인스턴스 로컬 메모리가 아닌 Redis(Redisson)·DB에 두어 인스턴스 수와 무관하게 정확성을 보장한다. `docker-compose`로 인프라를, k6 다중 `BASE_URLS` 옵션으로 다중 인스턴스 시나리오를 재현할 수 있다. |
-| 동시성 처리 | Redisson 분산 락(1차) + DB 비관적 락(최종). `OrderConcurrencyIntegrationTest`로 수치 검증. |
-| 데이터 일관성 | `point_transaction` 원장을 원천으로, `user_point.balance`를 캐시로 분리. Kafka 이벤트는 `AFTER_COMMIT`에만 발행해 결제 트랜잭션과 분리. |
-| 각 기능/제약별 테스트 | `OrderConcurrencyIntegrationTest`(동시성), `OrderEventKafkaIntegrationTest`(이벤트 발행-소비, 멱등성), `CoffeeOrderSystemApplicationTests`(컨텍스트 로딩). |
+| 동시성 처리 | Redisson 분산 락(1차) + DB 비관적 락(최종). `OrderConcurrencyIntegrationTest`로 수치 검증. 락 해제(`unlock()`) 실패가 이미 성공한 응답을 덮어쓰지 않도록 별도 방어 처리(`OrderService`). |
+| 데이터 일관성 | `point_transaction` 원장을 원천으로, `user_point.balance`를 캐시로 분리. Kafka 이벤트는 `AFTER_COMMIT`에만 발행해 결제 트랜잭션과 분리. 랭킹 Consumer는 ledger(`ProcessedEvent`) DB insert를 Redis 반영보다 먼저 수행해, 트랜잭션 롤백 후 재시도되는 경우에도 Redis가 이중으로 증가하지 않게 했다. |
+| 각 기능/제약별 테스트 | `OrderConcurrencyIntegrationTest`(동시성), `OrderEventKafkaIntegrationTest`(이벤트 발행-소비, 멱등성), `IndexUsageVerificationTest`(EXPLAIN 기반 인덱스 사용 검증), `CoffeeOrderSystemApplicationTests`(컨텍스트 로딩). |
 | 데이터 수집 플랫폼 실시간 전송(모의) | `event.producer.OrderEventProducer`가 Kafka로 발행하는 것을 실시간 전송의 진입점으로 삼았다. 실제 외부 플랫폼 연동은 이 topic을 구독하는 별도 Consumer(모의/테스트 코드)로 대체 가능하다. |
+| 장애 복구 운영 도구 | Redis 유실 시 DB 재계산(`POST /api/menus/popular/rebuild`), Kafka 소비 실패 누적 시 DLT 수동 재발행(`POST /api/admin/dlt/replay`), ledger 보존기간 정리(`POST /api/admin/processed-events/purge`, 매일 자동 실행). |
 
 ## 테스트
 
@@ -221,11 +224,17 @@ Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야
 
 이번 구현 범위에서 의도적으로 제외하고 향후 확장 여지로 남긴 부분이다 (설계 원칙 5번).
 
-- **DLT 자동 재처리**: 현재는 실패 메시지를 DLT로 격리하는 것까지만 구현했고, DLT에 쌓인
-  메시지를 자동으로 재처리하는 배치/스케줄러는 없다.
+- **DLT 자동 재처리**: `POST /api/admin/dlt/replay`로 수동 트리거는 가능하지만, 실패 원인을
+  자동 판별해 재발행 여부를 결정하는 배치/스케줄러는 아직 없다. 운영자가 원인을 확인한 뒤
+  트리거하는 것을 전제로 한다.
 - **Kafka replay 기반 랭킹 자동 복구**: `POST /api/menus/popular/rebuild`로 DB 기준 수동
   재구성은 가능하지만, `order.completed` topic을 replay해 자동으로 복구하는 절차는 별도
   ADR로 승격할 사안으로 남겨뒀다.
-- **Idempotency Key 정리(TTL/배치 삭제)**: 오래된 키를 정리하는 정책은 아직 없다.
+- **Idempotency Key(`idempotency_key` 테이블) 정리(TTL/배치 삭제)**: Kafka ledger
+  (`processed_event`)는 30일 보존기간 정리를 구현했지만(`ProcessedEventRetentionService`),
+  주문/충전 API의 `idempotency_key` 테이블은 아직 정리 정책이 없다.
 - **인증/인가**: `userId`를 요청 바디로 직접 받는 구조로, 별도 인증 체계는 이번 스코프 밖이다.
-  랭킹 재구성 API도 같은 이유로 인증 없이 열려 있다.
+  `/rebuild`, `/api/admin/**` 운영 엔드포인트도 같은 이유로 인증 없이 열려 있다.
+- **QueryDSL 도입**: 쿼리 인덱스 사용 여부는 `IndexUsageVerificationTest`(EXPLAIN)로 검증했지만,
+  타입 세이프 쿼리 빌더(QueryDSL) 자체는 도입하지 않았다. 이 환경에서 Gradle 애노테이션 프로세서
+  설정을 실제로 컴파일 검증할 수 없어, 빌드를 깨뜨릴 위험을 감수하지 않기로 판단했다.
