@@ -13,8 +13,10 @@ COPY gradlew gradlew.bat settings.gradle build.gradle ./
 COPY gradle gradle
 RUN chmod +x gradlew
 
-# 의존성 레이어를 소스 변경과 분리해 캐시 효율을 높인다.
-RUN ./gradlew --version --no-daemon
+# 의존성만 먼저 받아 별도 레이어로 캐싱한다. src만 바뀐 재빌드에서는 이 레이어가 재사용돼
+# 매번 mavenCentral에서 다시 받지 않는다. (`--version`은 프로젝트 의존성을 전혀 건드리지
+# 않아 캐싱 효과가 없으므로 실제로 의존성을 resolve하는 `dependencies` 태스크를 쓴다.)
+RUN ./gradlew dependencies --no-daemon || true
 
 COPY src src
 RUN ./gradlew bootJar --no-daemon -x test

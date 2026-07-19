@@ -41,6 +41,10 @@ services:
     image: redis:7.2-alpine
     container_name: coffee-order-redis
     restart: unless-stopped
+    # Redis 기본값(protected-mode yes, bind/requirepass 없음)은 루프백이 아닌 연결을 모두
+    # 거부한다. host의 published port(6379) 경유 접속이 루프백으로 인식되지 않는 환경(도커
+    # 네트워킹 구현체에 따라 다름)이 있어, 로컬 전용 구성이라는 전제 하에 명시적으로 끈다.
+    command: redis-server --protected-mode no
     ports:
       - "6379:6379"
     healthcheck:
@@ -81,16 +85,20 @@ services:
 
   # ---- Redis Sentinel 토폴로지 (Master 1 + Replica 2 + Sentinel 3, 쿼럼 2) ----
   # 컨테이너화된 app 서비스 전용. docs/adr/ADR-009 참고.
+  # 모든 노드에 --protected-mode no를 준다: 기본값(protected-mode yes)은 bind/requirepass가
+  # 없으면 루프백이 아닌 연결을 전부 거부하는데, replica→master 복제, sentinel→master 모니터링,
+  # app→sentinel 접속이 전부 컨테이너 간(비루프백) 연결이라 기본값 그대로면 셋 다 막힌다.
   redis-master:
     image: redis:7.2-alpine
     container_name: coffee-order-redis-master
     restart: unless-stopped
+    command: redis-server --protected-mode no
 
   redis-replica-1:
     image: redis:7.2-alpine
     container_name: coffee-order-redis-replica-1
     restart: unless-stopped
-    command: redis-server --replicaof redis-master 6379
+    command: redis-server --replicaof redis-master 6379 --protected-mode no
     depends_on:
       - redis-master
 
@@ -98,7 +106,7 @@ services:
     image: redis:7.2-alpine
     container_name: coffee-order-redis-replica-2
     restart: unless-stopped
-    command: redis-server --replicaof redis-master 6379
+    command: redis-server --replicaof redis-master 6379 --protected-mode no
     depends_on:
       - redis-master
 
