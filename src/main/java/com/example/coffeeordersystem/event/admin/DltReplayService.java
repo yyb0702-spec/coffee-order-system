@@ -18,7 +18,7 @@ import java.util.Map;
 
 /**
  * ADR-003 재검토 조건: DLT(order.completed.DLT)에 격리된 메시지를 원본 topic으로
- * 되돌려 재처리하는 운영 도구 (#82). 자동 재처리는 스코프 밖으로 남기고,
+ * 되돌려 재처리하는 운영 도구. 자동 재처리는 스코프 밖으로 남기고,
  * 운영자가 원인을 확인한 뒤 수동으로 트리거하는 것을 전제로 한다.
  * <p>
  * RankingEventConsumer가 eventId 기준 멱등 처리(ProcessedEvent unique 제약)를 하므로,

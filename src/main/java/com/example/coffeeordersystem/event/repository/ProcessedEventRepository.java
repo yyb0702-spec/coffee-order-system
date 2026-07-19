@@ -9,6 +9,6 @@ public interface ProcessedEventRepository extends JpaRepository<ProcessedEvent, 
 
     boolean existsByEventId(String eventId);
 
-    // ledger(멱등 처리 이력) 보존기간 정리용 (#126).
+    // ledger(멱등 처리 이력) 보존기간 정리용.
     long deleteByProcessedAtBefore(LocalDateTime cutoff);
 }

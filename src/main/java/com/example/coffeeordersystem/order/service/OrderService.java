@@ -47,7 +47,7 @@ public class OrderService {
         try {
             return orderPaymentProcessor.pay(idempotencyKey, request);
         } finally {
-            // unlock()이 던지는 예외가 위에서 이미 완성된 성공 응답을 덮어쓰지 않도록 방어한다(#116 대응).
+            // unlock()이 던지는 예외가 위에서 이미 완성된 성공 응답을 덮어쓰지 않도록 방어한다.
             // 락은 어차피 leaseTime(LOCK_LEASE_SECONDS) 후 자동 만료되므로, 해제 실패는 로그만 남기고 넘어간다.
             if (lock.isHeldByCurrentThread()) {
                 try {

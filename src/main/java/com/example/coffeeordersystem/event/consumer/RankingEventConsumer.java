@@ -33,7 +33,7 @@ public class RankingEventConsumer {
             return;
         }
 
-        // DB insert(원장/ledger)를 Redis 반영보다 먼저 수행한다 (#100 대응).
+        // DB insert(원장/ledger)를 Redis 반영보다 먼저 수행한다.
         // Redis ZINCRBY는 DB 트랜잭션에 묶이지 않아 롤백되지 않으므로, 순서가 반대이면
         // "Redis 증가 성공 -> DB save 실패 -> 트랜잭션 롤백 -> Kafka 재시도 -> Redis 재증가"
         // 시나리오에서 이중 카운트가 발생한다. DB save를 먼저 두면 save가 실패할 때

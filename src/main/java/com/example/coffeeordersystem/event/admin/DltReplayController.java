@@ -9,7 +9,7 @@ import org.springframework.web.bind.annotation.RestController;
 import java.util.Map;
 
 /**
- * DLT(order.completed.DLT) 재발행 운영 엔드포인트 (#82).
+ * DLT(order.completed.DLT) 재발행 운영 엔드포인트.
  * 일반 사용자 트래픽 경로가 아니므로 인증/인가는 이번 스코프에서 다루지 않는다
  * (RankingController#rebuild와 동일한 전제).
  */

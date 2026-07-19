@@ -10,9 +10,9 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.LocalDateTime;
 
 /**
- * #126 ledger(ProcessedEvent) 보존기간 정리.
+ * ledger(ProcessedEvent) 보존기간 정리.
  * <p>
- * ProcessedEvent는 Kafka Consumer의 eventId 기준 멱등 처리(#100)와 DLT 재발행(#82) 모두가
+ * ProcessedEvent는 Kafka Consumer의 eventId 기준 멱등 처리와 DLT 재발행 모두가
  * 공유하는 단일 ledger다. 무한정 쌓아두면 테이블이 계속 커지므로, 재시도/재발행이 현실적으로
  * 일어날 수 있는 기간(RETENTION_DAYS)보다 오래된 항목은 주기적으로 정리한다.
  * <p>

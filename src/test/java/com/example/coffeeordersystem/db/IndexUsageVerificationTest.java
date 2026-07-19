@@ -10,6 +10,7 @@ import org.testcontainers.junit.jupiter.Container;
 import org.testcontainers.junit.jupiter.Testcontainers;
 
 import java.time.LocalDateTime;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
 
@@ -17,7 +18,8 @@ import static org.junit.jupiter.api.Assertions.assertEquals;
 import static org.junit.jupiter.api.Assertions.assertNotNull;
 
 /**
- * #85 인덱스 사용 검증. QueryDSL은 도입하지 않았다 — 이 스코프에서 검증하려는 건
+ * 쿼리 인덱스 사용 검증 (참고 저장소의 QueryDSL+EXPLAIN 검증 방식에서 아이디어를 가져옴).
+ * QueryDSL은 도입하지 않았다 — 이 스코프에서 검증하려는 건
  * "쿼리가 인덱스를 타는가"이지 쿼리 작성 방식(JPQL vs QueryDSL) 자체가 아니고,
  * Gradle 애노테이션 프로세서 설정을 이 환경에서 실제로 컴파일 검증할 수 없어
  * 빌드를 깨뜨릴 위험을 감수하고 싶지 않았다. 대신 Repository의 JPQL이 생성하는 SQL과
@@ -30,7 +32,6 @@ class IndexUsageVerificationTest {
 
     private static final int PAID_ORDER_COUNT = 2000;
     private static final int CANCELLED_ORDER_COUNT = 500;
-    private static final int MENU_COUNT = 5;
 
     @Container
     static MySQLContainer<?> mysql = new MySQLContainer<>("mysql:8.0")
@@ -57,24 +58,31 @@ class IndexUsageVerificationTest {
     }
 
     private static void seedData() {
-        for (int i = 1; i <= MENU_COUNT; i++) {
-            jdbcTemplate.update("INSERT INTO menu (name, price) VALUES (?, ?)", "메뉴" + i, 4000);
-        }
+        // V2__seed_menu.sql이 이미 메뉴를 시드하므로 새로 insert하지 않고, 실제 존재하는
+        // 메뉴 ID를 그대로 재사용한다 (직접 insert하면 id 1~5가 이미 쓰여 있어 6~10번대의
+        // 쓰이지 않는 행만 늘어난다).
+        List<Long> menuIds = jdbcTemplate.queryForList("SELECT id FROM menu ORDER BY id", Long.class);
+
         jdbcTemplate.update("INSERT INTO user_point (user_id, balance) VALUES (?, ?)", 1L, 10_000_000);
 
         LocalDateTime now = LocalDateTime.now();
+        List<Object[]> paidRows = new ArrayList<>(PAID_ORDER_COUNT);
         for (int i = 0; i < PAID_ORDER_COUNT; i++) {
-            long menuId = (i % MENU_COUNT) + 1;
-            jdbcTemplate.update(
-                    "INSERT INTO orders (user_id, menu_id, paid_amount, status, ordered_at) VALUES (?, ?, ?, 'PAID', ?)",
-                    1L, menuId, 4000, now.minusHours(i));
+            long menuId = menuIds.get(i % menuIds.size());
+            paidRows.add(new Object[] {1L, menuId, 4000, now.minusHours(i)});
         }
+        jdbcTemplate.batchUpdate(
+                "INSERT INTO orders (user_id, menu_id, paid_amount, status, ordered_at) VALUES (?, ?, ?, 'PAID', ?)",
+                paidRows);
+
+        List<Object[]> cancelledRows = new ArrayList<>(CANCELLED_ORDER_COUNT);
         for (int i = 0; i < CANCELLED_ORDER_COUNT; i++) {
-            long menuId = (i % MENU_COUNT) + 1;
-            jdbcTemplate.update(
-                    "INSERT INTO orders (user_id, menu_id, paid_amount, status, ordered_at) VALUES (?, ?, ?, 'CANCELLED', ?)",
-                    1L, menuId, 4000, now.minusHours(i));
+            long menuId = menuIds.get(i % menuIds.size());
+            cancelledRows.add(new Object[] {1L, menuId, 4000, now.minusHours(i)});
         }
+        jdbcTemplate.batchUpdate(
+                "INSERT INTO orders (user_id, menu_id, paid_amount, status, ordered_at) VALUES (?, ?, ?, 'CANCELLED', ?)",
+                cancelledRows);
     }
 
     /**
