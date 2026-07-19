@@ -1,0 +1,68 @@
+# 로컬 개발/통합 테스트용 인프라. application.yaml의 접속 정보와 반드시 맞춰야 한다.
+# - MySQL   : localhost:3306 / coffee_order_system / root / 12345678
+# - Redis   : localhost:6379
+# - Kafka   : localhost:9092 (KRaft 단일 브로커, Zookeeper 불필요)
+#
+# 실행: docker compose -f docker/docker-compose.yml up -d
+# 종료: docker compose -f docker/docker-compose.yml down -v
+
+services:
+  mysql:
+    image: mysql:8.0
+    container_name: coffee-order-mysql
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: "12345678"
+      MYSQL_DATABASE: coffee_order_system
+      TZ: Asia/Seoul
+    ports:
+      - "3306:3306"
+    volumes:
+      - mysql-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-p12345678"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  redis:
+    image: redis:7.2-alpine
+    container_name: coffee-order-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  kafka:
+    image: bitnami/kafka:3.7
+    container_name: coffee-order-kafka
+    restart: unless-stopped
+    ports:
+      - "9092:9092"
+    environment:
+      # KRaft 모드: Zookeeper 없이 단일 브로커로 동작 (로컬 개발용 최소 구성).
+      # 앱은 컨테이너가 아니라 host에서 직접 붙으므로 advertised listener를 localhost:9092로 고정한다.
+      KAFKA_CFG_NODE_ID: 0
+      KAFKA_CFG_PROCESS_ROLES: controller,broker
+      KAFKA_CFG_CONTROLLER_QUORUM_VOTERS: 0@kafka:9093
+      KAFKA_CFG_LISTENERS: PLAINTEXT://:9092,CONTROLLER://:9093
+      KAFKA_CFG_ADVERTISED_LISTENERS: PLAINTEXT://localhost:9092
+      KAFKA_CFG_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_CFG_CONTROLLER_LISTENER_NAMES: CONTROLLER
+      KAFKA_CFG_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      ALLOW_PLAINTEXT_LISTENER: "yes"
+    volumes:
+      - kafka-data:/bitnami/kafka
+    healthcheck:
+      test: ["CMD", "kafka-topics.sh", "--bootstrap-server", "localhost:9092", "--list"]
+      interval: 10s
+      timeout: 10s
+      retries: 10
+
+volumes:
+  mysql-data:
+  kafka-data:

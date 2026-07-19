@@ -27,6 +27,6 @@ public class OrderController {
             @RequestHeader("Idempotency-Key") String idempotencyKey,
             @Valid @RequestBody OrderRequest request
     ) {
-        return orderService.placeOrder(request);
+        return orderService.placeOrder(idempotencyKey, request);
     }
 }
