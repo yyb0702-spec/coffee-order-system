@@ -90,3 +90,6 @@ POST {{baseUrl}}/api/menus/popular/rebuild
 
 ### 6. (운영용) DLT에 쌓인 메시지를 원본 topic으로 재발행 (최대 100건)
 POST {{baseUrl}}/api/admin/dlt/replay?maxRecords=100
+
+### 7. (운영용) ledger(ProcessedEvent) 보존기간(30일) 지난 항목 즉시 정리
+POST {{baseUrl}}/api/admin/processed-events/purge
