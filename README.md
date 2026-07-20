@@ -277,75 +277,18 @@ Testcontainers를 사용하므로 로컬에 Docker 데몬이 실행 중이어야
 ## 트러블슈팅
 
 구현하면서 실제로 부딪힌 문제와 원인, 해결 방법을 정리한다. "동시성 처리를 했다"는 서술만으로는
-드러나지 않는, 구현 중간에 실제로 발견하고 고친 것들이다.
+드러나지 않는, 구현 중간에 실제로 발견하고 고친 것들이다. 각 항목의 상세 기록(문제 상황 → 원인 →
+해결 → 검증 → 배운 점)은 [`docs/troubleShooting/`](docs/troubleShooting)에 문서별로 정리했다.
 
-### 랭킹 Redis 이중 카운트 — 서로 다른 두 저장소를 하나의 트랜잭션처럼 다룰 수 없다
-
-`RankingEventConsumer`는 Kafka 이벤트 하나를 처리할 때 DB에 처리 이력(`ProcessedEvent`)을 남기고
-Redis ZSET 점수를 올리는 두 가지 작업을 한다. 처음엔 Redis 반영을 먼저 하고 DB insert를 나중에
-했는데, Redis `ZINCRBY`는 JPA `@Transactional`의 롤백 대상이 아니라는 걸 놓친 설계였다. DB insert가
-실패해 트랜잭션이 롤백되면 Kafka가 같은 이벤트를 재시도하고, 이미 반영된 Redis 점수 위에 또
-반영되면서 이중 카운트가 발생하는 구조였다. DB insert를 Redis 반영보다 먼저 수행하도록 순서를
-바꿔서 해결했다 — DB insert가 실패하면 Redis는 아직 손대지 않은 상태라 재시도해도 안전하고, DB
-insert가 성공한 뒤 Redis 반영이 실패해도 트랜잭션 자체가 롤백돼 다음 재시도가 두 작업을 처음부터
-함께 재현한다.
-
-### 락 해제 실패가 이미 성공한 응답을 덮어씀
-
-`OrderService`/`PointChargeService`는 Redisson 락을 획득한 뒤 `finally` 블록에서 `unlock()`을
-호출한다. 처음엔 이 `unlock()` 호출이 예외를 던지면 그 예외가 그대로 위로 전파돼, 정작 비즈니스
-로직(주문/충전)은 성공했는데도 사용자에게는 실패 응답이 나가는 구조였다. `unlock()`을 별도
-try-catch로 감싸 실패 시 경고 로그만 남기고 삼키도록 고쳤다 — 어차피 lease time이 지나면 락은
-자동 만료되므로, 정리(cleanup) 단계의 실패가 이미 완료된 본 로직의 성공 결과를 가려서는 안 된다고
-판단했다.
-
-### Spring AOP self-invocation으로 `@Transactional`이 조용히 무력화됨
-
-`ProcessedEventRetentionService`는 `@Scheduled` 메서드가 `@Transactional`이 붙은 메서드를
-같은 클래스 안에서 `this.method()` 형태로 호출하는 구조였다. Spring의 `@Transactional`은 프록시
-기반이라 이렇게 같은 객체 안에서 호출하면 프록시를 거치지 않아 트랜잭션이 실제로는 걸리지 않는다
-— 코드만 보면 정상으로 보이지만 조용히 의도한 대로 동작하지 않는 전형적인 함정이다. 두 메서드를
-`@Scheduled`와 `@Transactional`을 모두 가진 하나의 메서드로 합쳐서, 스케줄러가 프록시를 거쳐
-외부에서 호출하도록 고쳤다.
-
-### 포인트 최초 충전 시 락 걸 대상이 아직 존재하지 않는 동시성 레이스
-
-기존 유저의 포인트 충전은 `user_point` 행을 `SELECT FOR UPDATE`로 잠그면 되지만, 아직 한 번도
-충전한 적 없는 신규 유저는 잠글 행 자체가 없다. 동시에 두 요청이 들어오면 둘 다 "행이 없으니
-새로 만들자"고 판단해 `INSERT`를 시도할 수 있었고, 유니크 제약 위반으로 한쪽이 예외를 맞을 수
-있는 구조였다. 이미 있던 주문(`OrderService`)의 Redisson 락 패턴을 포인트 충전에도 동일하게
-적용해(`PointChargeService`) userId 단위로 진입 자체를 직렬화하는 방식으로 해결했다. "동시성
-제어를 이미 했다"고 생각했던 기능에, 락 걸 대상이 아직 존재하지 않는 최초 케이스가 빠져 있었던
-경우다.
-
-### 설계 문서(ADR)에 적은 대로 구현되지 않았던 Redis 장애 폴백
-
-ADR-004는 "인기 메뉴 조회 중 Redis 장애가 나면 DB로 폴백한다"고 명시하고 있었지만, 실제
-`RankingService` 코드는 Redis 조회 결과가 "비어있는 경우"만 DB 폴백으로 넘기고 있었다. Redis
-커넥션 자체가 끊겨 예외(`DataAccessException`)가 발생하는 경우는 잡고 있지 않아서, 실제 장애
-상황에서는 문서와 다르게 500 에러가 그대로 사용자에게 나갔을 것이다. `readFromRedis()` 호출을
-try-catch로 감싸 예외 케이스도 폴백 경로에 포함시켜서 해결했다. 설계 문서에 적었다는 것과 실제
-코드가 그렇게 동작한다는 것은 별개이며, 코드 레벨에서 다시 확인해야 드러나는 종류의 문제였다.
-
-### Kafka advertised listener — host 프로세스와 컨테이너가 서로 다른 이름으로 서로를 봄
-
-앱을 `./gradlew bootRun`으로 host에서 직접 띄울 때는 Kafka에 `localhost:9092`로 접속하면
-되지만, 앱을 Sentinel 실증을 위해 컨테이너화하면서(ADR-009) 같은 Kafka에 컨테이너 네트워크
-안에서 `kafka:29092`로도 접속해야 하는 상황이 생겼다. 리스너를 하나만 advertise하면 두 접속
-경로 중 하나는 반드시 실패한다 — 컨테이너 안에서는 `localhost`가 자기 자신을 가리키고, host
-프로세스는 컨테이너 내부 서비스 이름을 resolve할 수 없기 때문이다. `KAFKA_LISTENERS`/
-`KAFKA_ADVERTISED_LISTENERS`를 INTERNAL(컨테이너용)과 EXTERNAL(host용) 두 개로 나눠 두 접속
-경로를 동시에 지원하도록 했다.
-
-### Redis Sentinel protected-mode — 설계는 맞았는데 기본 보안 설정이 전부를 막고 있었음
-
-Master 1 + Replica 2 + Sentinel 3 토폴로지를 docker-compose에 구성했는데, 실행하기 전 코드
-리뷰 단계에서 Redis의 기본값(`protected-mode yes`)이 `bind`나 비밀번호 설정이 없으면 루프백이
-아닌 연결을 전부 거부한다는 점을 확인했다. Replica가 Master에 복제 연결을 맺는 것도, Sentinel이
-Master를 모니터링하는 것도, 앱이 Sentinel에 접속하는 것도 전부 컨테이너 간(비루프백) 연결이라
-기본값 그대로 두면 토폴로지 전체가 서로 못 붙었을 것이다. 모든 Redis/Sentinel 컨테이너에
-`protected-mode no`를 명시해 해결했다. 컴포넌트 하나하나의 설계가 맞아도, 각 컴포넌트의 기본
-보안 설정이 서로를 막을 수 있다는 걸 보여주는 사례다.
+| 문서 | 요약 |
+| --- | --- |
+| [01. 랭킹 Redis 이중 카운트](docs/troubleShooting/01-ranking-redis-double-count.md) | DB insert와 Redis ZINCRBY의 트랜잭션 경계가 달라 재시도 시 이중 카운트가 발생하던 문제. 작업 순서 재배치로 해결. |
+| [02. 락 해제 실패가 성공 응답을 덮어씀](docs/troubleShooting/02-lock-unlock-swallows-success.md) | `finally`의 `unlock()` 예외가 이미 성공한 `try`의 리턴값을 덮어쓰던 문제. try-catch와 lease time 안전망으로 해결. |
+| [03. Spring AOP self-invocation](docs/troubleShooting/03-spring-aop-self-invocation.md) | 같은 클래스 내부 호출이 프록시를 거치지 않아 `@Transactional`이 조용히 무력화되던 문제. |
+| [04. 포인트 최초 충전 동시성 레이스](docs/troubleShooting/04-point-charge-concurrency-race.md) | 잠글 행이 아직 없는 신규 유저의 동시 최초 충전 요청이 유니크 제약 위반을 낼 수 있던 문제. Redisson 락으로 진입 자체를 직렬화해 해결. |
+| [05. Redis 장애 폴백 예외 처리 누락](docs/troubleShooting/05-redis-fallback-missing-exception-handling.md) | ADR-004에 문서화한 장애 폴백이 "결과 없음"만 처리하고 "연결 실패 예외"는 놓치고 있던 문제. |
+| [06. Kafka advertised listener 이원화](docs/troubleShooting/06-kafka-dual-listener.md) | host 프로세스와 컨테이너가 같은 Kafka 브로커에 서로 다른 이름으로 접속해야 했던 문제. INTERNAL/EXTERNAL 리스너 분리로 해결. |
+| [07. Redis Sentinel protected-mode](docs/troubleShooting/07-redis-sentinel-protected-mode.md) | Sentinel 토폴로지 설계는 맞았지만 Redis 기본 보안 설정이 컨테이너 간 통신 자체를 막고 있던 문제. 실행 전 리뷰로 사전에 발견. |
 
 ## 향후 확장 과제
 
